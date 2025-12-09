@@ -14,6 +14,8 @@ from Agents.Mixed_Agent import MixedAgent
 import logging
 logging.getLogger("poke-env").setLevel(logging.ERROR)
 
+import os
+
 def make_base_env():
     '''Builds our Generic Gen 9 Singles Environment'''
     base_env = Gen9SinglesEnv(
@@ -78,13 +80,13 @@ def build_model(train_env):
     model = DQN(
         policy="MlpPolicy",
         env=train_env,
-        learning_rate=2.4e-4,
-        buffer_size=100_000,
+        learning_rate=5e-5,
+        buffer_size=300_000,
         learning_starts=10_000,
         batch_size=32,
-        gamma=.99,
+        gamma=.995,
         train_freq=4,
-        exploration_fraction=0.30,
+        exploration_fraction=0.20,
         exploration_final_eps=0.02,
         verbose=0,
         policy_kwargs=policy_kwargs
@@ -104,6 +106,46 @@ def train_model(model, timesteps, reset_num_timesteps=True, log_interval=100):
 
     #Save the model
     model.save("dqn_pokemon_shodown_gen9_randombattles")
+
+    return model
+
+def train_in_chunks(
+    model,
+    total_timesteps: int,
+    chunk_size: int,
+    save_path: str,
+    first_chunk_reset: bool = True,
+    log_interval: int = 100,
+):
+    """
+    Train `total_timesteps` in chunks of `chunk_size`, always overwriting `save_path`.
+    Example: save_path="phase3_maxdamage_latest.zip"
+    """
+    timesteps_trained_before = model.num_timesteps
+    remaining = total_timesteps
+
+    first = True
+    while remaining > 0:
+        this_chunk = min(remaining, chunk_size)
+
+        model.learn(
+            total_timesteps=this_chunk,
+            reset_num_timesteps=(first and first_chunk_reset),
+            log_interval=log_interval,
+            progress_bar=True,
+        )
+
+        remaining -= this_chunk
+        first = False
+
+        # Overwrite single checkpoint
+        model.save(save_path)
+        print(f"[CHECKPOINT] Saved model at {save_path} (global steps: {model.num_timesteps})")
+
+    print(
+        f"Finished chunked training: {model.num_timesteps - timesteps_trained_before} new steps "
+        f"(total {model.num_timesteps})."
+    )
 
     return model
 
@@ -142,41 +184,65 @@ if __name__ == "__main__":
     test_environment(base_env) #Test our base env to ensure everything works as intended
 
     '''=========PHASE 1: TRAIN AGAINST RANDOM AGENT========='''
-
-    train_env = make_train_env(opponent=RandomAgent())
+    '''train_env = make_train_env(opponent=RandomAgent())
     eval_env = make_eval_env(opponent=RandomAgent())
 
-    model = build_model(train_env)
+    model = build_model(train_env=train_env)
 
-    train_model(model=model, timesteps=50_000, reset_num_timesteps=True)
+    train_in_chunks(
+        model,
+        total_timesteps= 100_000,
+        chunk_size=50_000,
+        save_path="phase_1_random_agent.zip",
+        first_chunk_reset=True
+    )
 
     mean_reward, std_reward, winrate = eval_model(eval_env=eval_env, model=model)
 
-    print(f'Phase 1 Complete: opponent: Random Agent')
-    print(f'Mean Reward: {mean_reward:.2f}, Std Reward: {std_reward:.2f}, Winrate: {winrate:.2f}')
+    print(f'Phase 1 Complete: opponent: RandomAgent')
+    print(f'Mean Reward: {mean_reward:.2f}, Std Reward: {std_reward:.2f}, Winrate: {winrate:.2f}')'''
 
     '''=========PHASE 2: TRAIN AGAINST MIXED AGENT========='''
-
-    train_env = make_train_env(opponent=MixedAgent())
+        
+    '''train_env = make_train_env(opponent=MixedAgent())
     eval_env = make_eval_env(opponent=MixedAgent())
 
     model.set_env(train_env)
 
-    train_model(model=model, timesteps=100_000, reset_num_timesteps=True)
+    train_in_chunks(
+            model,
+            total_timesteps = 100_000,
+            chunk_size = 50_000,
+            save_path = "phase_2_mixed_agent.zip",
+            first_chunk_reset=True
+    )
 
     mean_reward, std_reward, winrate = eval_model(eval_env=eval_env, model=model)
 
     print(f'Phase 2 Complete: opponent: MixedAgent')
-    print(f'Mean Reward: {mean_reward:.2f}, Std Reward: {std_reward:.2f}, Winrate: {winrate:.2f}')
+    print(f'Mean Reward: {mean_reward:.2f}, Std Reward: {std_reward:.2f}, Winrate: {winrate:.2f}')'''
 
     '''=========PHASE 3: TRAIN AGAINST MAX DAMAGE AGENT========='''
+    model = DQN.load('phase_3_max_damage_agent.zip')
 
     train_env = make_train_env(opponent=MaxDamageAgent())
     eval_env = make_eval_env(opponent=MaxDamageAgent())
 
     model.set_env(train_env)
 
-    train_model(model=model, timesteps=1_000_000, reset_num_timesteps=True)
+    mean_reward, std_reward, winrate = eval_model(eval_env=eval_env, model=model)
+
+    print(f'Phase 3 Started: opponent: MaxDamageAgent')
+    print(f'Current Mean Reward: {mean_reward:.2f}, Current Std Reward: {std_reward:.2f}, Current Winrate: {winrate:.2f}')
+
+
+    train_in_chunks(
+        model,
+        total_timesteps=1_000_000,
+        chunk_size=50_000,
+        save_path="phase_3_max_damage_agent.zip",
+        first_chunk_reset=False
+    )
 
     mean_reward, std_reward, winrate = eval_model(eval_env=eval_env, model=model)
 

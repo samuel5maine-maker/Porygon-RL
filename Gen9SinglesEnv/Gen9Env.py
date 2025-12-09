@@ -33,30 +33,72 @@ type_chart = {
     'THREE_QUESTION_MARKS': {'NORMAL': 1, 'FIRE': 1, 'WATER': 1, 'ELECTRIC': 1, 'GRASS': 1, 'ICE': 1, 'FIGHTING': 1, 'POISON': 1, 'GROUND': 1, 'FLYING': 1, 'PSYCHIC': 1, 'BUG': 1, 'ROCK': 1, 'GHOST': 1, 'DRAGON': 1, 'DARK': 1, 'STEEL': 1, 'FAIRY': 1, 'STELLAR': 1, 'THREE_QUESTION_MARKS': 1},
 }
 
+# Order defines the embedding index for each type
+TYPE_ORDER = [
+    PokemonType.BUG,
+    PokemonType.DARK,
+    PokemonType.DRAGON,
+    PokemonType.ELECTRIC,
+    PokemonType.FAIRY,
+    PokemonType.FIGHTING,
+    PokemonType.FIRE,
+    PokemonType.FLYING,
+    PokemonType.GHOST,
+    PokemonType.GRASS,
+    PokemonType.GROUND,
+    PokemonType.ICE,
+    PokemonType.NORMAL,
+    PokemonType.POISON,
+    PokemonType.PSYCHIC,
+    PokemonType.ROCK,
+    PokemonType.STEEL,
+    PokemonType.WATER,
+    PokemonType.STELLAR,
+    PokemonType.THREE_QUESTION_MARKS
+]
 
 class Gen9SinglesEnv(SinglesEnv):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         # Define the observation space
-        # We let our observation space be a 14-dimensional vector
-        # The first four entries are the moves' base powers (or -1 if no move)
-        # The next four are the damage multipliers for each move we have
-        # The ninth entry is the number of remaining Pokemon
-        # The tenth entry is the number of opponent's remaining Pokemon
-        # The eleventh entry is the number of pokemon statused on our side
-        # The twielfth entry is the number of pokemon statused on opponent's side
-        # The thirteenth and fourteenth entries are for fraction hp of our active pokemon and opponent's active pokemon
-        #The fifteenth entry is speed control (0 if slower than opponent, 1 if faster)
-        #The sixteenth to nineteenth entries are priority values for each move
-        #The twentienth to twentythird entries are move categories for each move (0=physical, 1=special, -1=status)
-        #The first six entries are the typing for all of our available pokemon
-        #The Last entries are all for the opponent active pokemon typing (0 if typing is false 1 otherwise)
-        low = [-1, -1, -1, -1, 0, 0, 0, 0, 
-                0, 0, 0, 0, 0, -1, -1, -1, -1, -1,
-                -1, -1, -1] + 6 * (18 * [0]) + 18 * [0]
-        high = [3, 3, 3, 3, 4, 4, 4, 4,
-                 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-                 1, 1, 1] + 6 * (18 * [1]) + 18 * [1]
+        # We let our observation space be a huge vector
+        low = [-1, -1, -1, -1, #Move Base powers
+               0, 0, 0, 0,  #Damage multipliers
+               0, 0, 0, 0,  #stab flags
+               0, 0, 0, 0,  #Healing flag
+               0, 0, 0, 0,  #status move flag
+               0, 0, 0, 0,  #is boost move
+                0, 0,       #Our and opponent remaining pokemon
+                0, 0,       #our and opponent statused pokemon
+                0, 0,       #our and opponent fractional hp
+                0,          #speed control (0 if false 1 if true)
+                -1, -1, -1, -1, #priority values
+                -1, -1, -1, -1, #move category 
+                -1]              #Tera Type
+        
+        
+        low = low + 14 * [-1] #oppont and our boosts
+        
+        low = low + 6 * (2 * [-1]) + 2 * [-1] #typing
+        #6 pokemon two maximum types per pokemon plus typing for opponent pokemon
+
+        high = [3, 3, 3, 3, #Move base powers
+                4, 4, 4, 4, #damage multipliers
+                1, 1, 1, 1, #stab flags
+                1, 1, 1, 1, #is heal move
+                1, 1, 1, 1, #is status move
+                1, 1, 1, 1, #is boost move
+                 1, 1,     #our and opponent remaining pokem
+                 1, 1,      #our and opponent statused pokemon
+                 1, 1,      #our and opponent fractional hp 
+                 1,         #speed control
+                 1, 1, 1, 1,  #priority values
+                 1, 1, 1, 1,  #move category
+                 1]          #Tera Type
+        
+        high = high + 14 * [1] #opponent and our boosts
+
+        high = high + 6 * (2 * [1]) + 2 * [1] #typing
 
         #Experimenting by removing the action mask from observation space
 
@@ -81,19 +123,22 @@ class Gen9SinglesEnv(SinglesEnv):
 
         self.special_moves = {"struggle", "recharge"}
 
+        # PokemonType -> embedding index
+        self.type_to_idx = {ptype: i for i, ptype in enumerate(TYPE_ORDER)}
+
     def calc_reward(self, battle: AbstractBattle) -> float:
         """Returns reward for current Battle State"""
         return self.reward_computing_helper(
             battle,
-            fainted_value=2.0,
-            hp_value=1.0,
-            status_value=0.5,
+            fainted_value=1.0,
+            hp_value= 0,
+            status_value=0,
             victory_value=10.0,
         )
 
     def embed_battle(self, battle: AbstractBattle) -> np.ndarray:
         """Embeds our battle into an observation space"""
-        moves_base_power, damage_multipliers = self._Embed_base_power_and_multiplier(battle)
+        moves_base_power, damage_multipliers, stab_flags, heal_flags, status_flags, boost_flags = self._Embed_moves(battle)
 
         #Vestial remaining pokemon
         our_remaining_pokemon, opponent_remaining_pokemon, our_statused_pokemon, opponent_statused_pokemon = self._Embed_status_and_remaining_pokemon(battle)
@@ -116,12 +161,25 @@ class Gen9SinglesEnv(SinglesEnv):
 
         #Embed the current action mask into the observation
         #action_mask = self.get_action_mask(battle)
+
+        #Embed our tera-type
+        tera_type = self._embed_tera_type(battle)
+
+        #Embed the stat boosts for each active pokemon
+        our_boosts = self._embed_boosts(battle.active_pokemon)
+        opp_boosts = self._embed_boosts(battle.opponent_active_pokemon)
     
         # Concatenate all features into a single observation vector
         observation = np.concatenate(
             [
                 moves_base_power,
                 damage_multipliers,
+                stab_flags,
+                heal_flags,
+                status_flags,
+                boost_flags,
+                [our_remaining_pokemon],
+                [opponent_remaining_pokemon],
                 [our_statused_pokemon],
                 [opponent_statused_pokemon],
                 [our_active_fraction_hp],
@@ -129,6 +187,9 @@ class Gen9SinglesEnv(SinglesEnv):
                 [speed_control],
                 priority_values,
                 move_categories,
+                our_boosts,
+                opp_boosts,
+                [tera_type],
             ]
         )
 
@@ -141,23 +202,45 @@ class Gen9SinglesEnv(SinglesEnv):
 
         return observation.astype(np.float32)
     
-    def _Embed_base_power_and_multiplier(self, battle: AbstractBattle) -> Tuple[np.ndarray, np.ndarray]:
-        '''Helper function to embed base power and damage multipliers for available moves'''
+    def _Embed_moves(self, battle: AbstractBattle) -> Tuple[np.ndarray, np.ndarray]:
+        '''Helper function to embed move information'''
         moves_base_power = -np.ones(4)      # base power values (normalized)
         damage_multipliers = np.ones(4)     # type effectiveness multipliers
+        stab_flags = np.zeros(4)            # same type attack bonus
+        heal_flags = np.zeros(4)
+        status_flags = np.zeros(4)
+        boost_flags = np.zeros(4)
+
+        all_moves = battle.active_pokemon.moves.values()
 
         # Enumerate through available moves and populate the vectors
-        for i, move in enumerate(battle.available_moves):
+        for i, move in enumerate(all_moves):
+            if move not in battle.available_moves:
+                continue
+
             # Normalize base power to be between 0 and 3 and update values. -1 if no move or move has no base power
-            moves_base_power[i] = move.base_power / 100 if move.base_power is not None else -1
-            # Update damage multiplier values for each move
-            damage_multipliers[i] = move.type.damage_multiplier(
+            bp = move.base_power / 100 if move.base_power is not None else -1
+            mult = move.type.damage_multiplier(
                 battle.opponent_active_pokemon.type_1,
                 battle.opponent_active_pokemon.type_2,
                 type_chart=self.type_chart,
             )
+
+            #update bp for each move
+            moves_base_power[i] = bp
+            # Update damage multiplier values for each move
+            damage_multipliers[i] = mult
+            #update stab flag for each move
+            stab_flags[i] = 1 if move.type in battle.active_pokemon.types else 0
+            #update heal flag for each move
+            heal_flags[i] = 1 if ("drain" in move.entry) or ("heal" in move.entry) else 0
+            #update status flag for each move
+            status_flags[i] = 1 if "status" in move.entry else 0
+            #update boost flag for each move
+            boost_flags[i] = 1 if "selfBoost" in move.entry else 0
+
         
-        return moves_base_power, damage_multipliers
+        return moves_base_power, damage_multipliers, stab_flags, heal_flags, status_flags, boost_flags
     
     def _Embed_status_and_remaining_pokemon(self, battle: AbstractBattle) -> Tuple[float, float, float, float]:
         '''Helper function to embed status and remaining pokemon counts'''
@@ -213,33 +296,37 @@ class Gen9SinglesEnv(SinglesEnv):
 
         return priority_values, move_categories
     
+    def _embed_boosts(self, mon) -> np.ndarray:
+        '''embeds boosts for pokemon'''
+        boosts = np.zeros(7)
+
+        #iterate through each stat
+        for i, boost in enumerate(mon.boosts.values()):
+            boosts[i] = boost / 7 #nomralize from -1 to 1
+        
+        return boosts
+    
     def _embed_typing(self, mon) -> np.ndarray:
         '''embeds the active pokemon's typing for opponent'''
-        typing_info = np.zeros(18)
+        typing_info = -np.ones(2)
         if mon.status == Status.FNT: 
             return typing_info
         types = mon.types
-        if PokemonType.BUG in types:      typing_info[0]  = 1
-        if PokemonType.DARK in types:     typing_info[1]  = 1
-        if PokemonType.DRAGON in types:   typing_info[2]  = 1
-        if PokemonType.ELECTRIC in types: typing_info[3]  = 1
-        if PokemonType.FAIRY in types:    typing_info[4]  = 1
-        if PokemonType.FIGHTING in types: typing_info[5]  = 1
-        if PokemonType.FIRE in types:     typing_info[6]  = 1
-        if PokemonType.FLYING in types:   typing_info[7]  = 1
-        if PokemonType.GHOST in types:    typing_info[8]  = 1
-        if PokemonType.GRASS in types:    typing_info[9]  = 1
-        if PokemonType.GROUND in types:   typing_info[10] = 1
-        if PokemonType.ICE in types:      typing_info[11] = 1
-        if PokemonType.NORMAL in types:   typing_info[12] = 1
-        if PokemonType.POISON in types:   typing_info[13] = 1
-        if PokemonType.PSYCHIC in types:  typing_info[14] = 1
-        if PokemonType.ROCK in types:     typing_info[15] = 1
-        if PokemonType.STEEL in types:    typing_info[16] = 1
-        if PokemonType.WATER in types:    typing_info[17] = 1
+
+        for i, t in enumerate(types):
+            idx = self.type_to_idx.get(t)
+            if idx is not None:
+                typing_info[i] = idx / len(TYPE_ORDER)
 
         return typing_info
 
+    def _embed_tera_type(self, battle: AbstractBattle) -> int:
+        '''Embeds the tera type of our active pokemon'''
+        tera_type = battle.active_pokemon.tera_type
+        if tera_type: 
+            return self.type_to_idx.get(tera_type) / len(TYPE_ORDER)
+        else:
+            return -1
 
 
     def get_action_mask(self, battle: AbstractBattle):
@@ -282,7 +369,6 @@ class Gen9SinglesEnv(SinglesEnv):
                         #The reason being the format for this current but doesn't require them
                         #And I am concerned that Poke-env will read them as possible with this implementation
                         #In the even that they are needed later, we can add them back in
-                        
                         #moves 22-25 are tera
                         if battle.can_tera:
                             action_mask[i + 16] = 1
@@ -311,6 +397,8 @@ class MaskedSingleAgentWrapper(SingleAgentWrapper):
                 #If no valid actions (should not happen), choose random action
                 action = int(self.action_space.sample())
 
+        force_switch = self.env.battle1.force_switch #Check force switch before we take action
+        battle = self.env.battle1 #check for battle before we take action
         action = np.int64(action)
         #Proceed with the original step function
         actions = {
@@ -319,8 +407,40 @@ class MaskedSingleAgentWrapper(SingleAgentWrapper):
         }
         obs, rewards, terms, truncs, infos = self.env.step(actions)
 
-        if is_invalid: rewards[self.env.agent1.username] = rewards[self.env.agent1.username] - .5 #slight negative penalty for picking invalid option.
         #We will eventually remove this for true action masking.
+        if is_invalid: #Give a negative penalty if move was selected outside of my action mask
+            rewards[self.env.agent1.username] = rewards[self.env.agent1.username] - .5 
+            #slight negative penalty for picking invalid option.
+
+        '''if (action < 6 and not force_switch):
+            rewards[self.env.agent1.username] = rewards[self.env.agent1.username] - .1'''
+            #slight negative penalty for switching as agent has been switching too often.
+        
+        #Slight positive reward for using super effective moves
+        '''if not force_switch and 5 < action:
+                mvs = (
+                    battle.available_moves
+                    if len(battle.available_moves) == 1
+                    and battle.available_moves[0].id in ["struggle", "recharge"]
+                    else list(battle.active_pokemon.moves.values())
+                )
+                move = mvs[(action - 6) % len(mvs)]
+                if move in (MoveCategory.PHYSICAL, MoveCategory.SPECIAL):
+                    damage_multiplier = move.type.damage_multiplier(
+                    battle.opponent_active_pokemon.type_1,
+                    battle.opponent_active_pokemon.type_2,
+                    type_chart=self.env.type_chart,
+                )
+                    if damage_multiplier >= 2:
+                        rewards[self.env.agent1.username] = rewards[self.env.agent1.username] + .3
+                    
+                    elif damage_multiplier == 0:
+                        rewards[self.env.agent1.username] = rewards[self.env.agent1.username] - .5
+
+                    elif damage_multiplier < 1.0:
+                        rewards[self.env.agent1.username] = rewards[self.env.agent1.username] - .25'''
+        
+        
         return (
             obs[self.env.agent1.username],
             rewards[self.env.agent1.username],
